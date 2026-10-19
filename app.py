@@ -1,5 +1,6 @@
 """«Вкусная история» — локальная книга рецептов на Flask и SQLite."""
 import json
+import math
 import os
 import re
 import sqlite3
@@ -334,6 +335,100 @@ def shopping_clear():
 
 
 # ---------- резервная копия ----------
+def validate_backup(data):
+    if not isinstance(data, list):
+        raise ValueError("Ожидался JSON-массив рецептов")
+
+    recipes = []
+    seen_ids = set()
+    required = {"id", "title", "category", "servings", "prep_min", "cook_min",
+                "description", "steps", "notes", "rating", "favorite",
+                "created_at", "ingredients"}
+    for index, item in enumerate(data, start=1):
+        if not isinstance(item, dict) or not required.issubset(item):
+            raise ValueError(f"Рецепт №{index}: отсутствуют обязательные поля")
+
+        rid = item["id"]
+        if (isinstance(rid, bool) or not isinstance(rid, int) or not 1 <= rid <= 2**63 - 1
+                or rid in seen_ids):
+            raise ValueError(f"Рецепт №{index}: некорректный или повторяющийся идентификатор")
+        seen_ids.add(rid)
+
+        for field in ("title", "category", "description", "steps", "notes", "created_at"):
+            if not isinstance(item[field], str):
+                raise ValueError(f"Рецепт №{index}: поле «{field}» должно быть текстом")
+        if not item["title"].strip() or not item["created_at"]:
+            raise ValueError(f"Рецепт №{index}: пустое название или дата создания")
+
+        for field, minimum, maximum in (("servings", 1, 1000), ("prep_min", 0, 100000),
+                                        ("cook_min", 0, 100000), ("rating", 0, 5),
+                                        ("favorite", 0, 1)):
+            value = item[field]
+            if (isinstance(value, bool) or not isinstance(value, int)
+                    or not minimum <= value <= maximum):
+                raise ValueError(f"Рецепт №{index}: некорректное значение поля «{field}»")
+
+        if not isinstance(item["ingredients"], list):
+            raise ValueError(f"Рецепт №{index}: список ингредиентов задан неверно")
+        ingredients = []
+        for line in item["ingredients"]:
+            if not isinstance(line, str) or not line.strip():
+                raise ValueError(f"Рецепт №{index}: некорректная строка ингредиента")
+            amount, unit, name = parse_ingredient(line)
+            if amount is not None and not math.isfinite(amount):
+                raise ValueError(f"Рецепт №{index}: некорректное количество ингредиента")
+            ingredients.append((amount, unit, name))
+
+        recipes.append((item, ingredients))
+    return recipes
+
+
+@app.route("/backup")
+def backup():
+    return render_template("backup.html")
+
+
+@app.post("/backup/import")
+def import_backup():
+    upload = request.files.get("backup")
+    if upload is None or not upload.filename:
+        flash("Выберите JSON-файл резервной копии")
+        return redirect(url_for("backup"))
+
+    try:
+        recipes = validate_backup(json.loads(upload.read()))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        flash("Не удалось прочитать файл: проверьте, что это корректный JSON в кодировке UTF-8")
+        return redirect(url_for("backup"))
+    except ValueError as error:
+        flash(f"Резервная копия не прошла проверку: {error}")
+        return redirect(url_for("backup"))
+
+    db = get_db()
+    try:
+        with db:
+            db.execute("DELETE FROM recipes")
+            for item, ingredients in recipes:
+                db.execute(
+                    "INSERT INTO recipes (id, title, category, servings, prep_min, cook_min,"
+                    " description, steps, notes, rating, favorite, created_at)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (item["id"], item["title"], item["category"], item["servings"],
+                     item["prep_min"], item["cook_min"], item["description"], item["steps"],
+                     item["notes"], item["rating"], item["favorite"], item["created_at"]))
+                for position, (amount, unit, name) in enumerate(ingredients):
+                    db.execute(
+                        "INSERT INTO ingredients (recipe_id, position, amount, unit, name)"
+                        " VALUES (?,?,?,?,?)",
+                        (item["id"], position, amount, unit, name))
+    except sqlite3.Error as error:
+        flash(f"Не удалось восстановить резервную копию: {error}")
+        return redirect(url_for("backup"))
+
+    flash(f"Восстановлено рецептов: {len(recipes)}")
+    return redirect(url_for("index"))
+
+
 @app.route("/export")
 def export():
     db = get_db()

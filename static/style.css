@@ -48,6 +48,8 @@ textarea { width: 100%; resize: vertical; }
 .flash { background: color-mix(in srgb, var(--accent) 14%, transparent);
   border-left: 3px solid var(--accent); padding: .6rem .9rem; margin: 0 0 1rem; }
 .empty { color: var(--muted); padding: 1.5rem 0; }
+.warning { background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-left: 3px solid var(--danger); padding: .6rem .9rem; }
 
 .filters { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: 1.25rem; }
 .filters input[type=search] { flex: 1 1 16rem; }
