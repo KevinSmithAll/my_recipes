@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<form class="filters" method="get">
+  <input type="search" name="q" value="{{ q }}" placeholder="Название или ингредиент">
+  <select name="category">
+    <option value="">Все категории</option>
+    {% for c in categories %}<option {{ 'selected' if c == category }}>{{ c }}</option>{% endfor %}
+  </select>
+  <label class="check"><input type="checkbox" name="fav" value="1" {{ 'checked' if fav }} onchange="this.form.submit()"> Только избранное</label>
+  <button type="submit">Найти</button>
+  <a class="btn" href="{{ url_for('random_recipe') }}">Случайный рецепт</a>
+</form>
+
+{% if recipes %}
+<ul class="list">
+  {% for r in recipes %}
+  <li>
+    <a href="{{ url_for('recipe', rid=r.id) }}">
+      <span class="title">{% if r.favorite %}<span class="fav" title="Избранное">★</span> {% endif %}{{ r.title }}</span>
+      <span class="meta">{{ r.category }}</span>
+      <span class="meta">{{ r.prep_min + r.cook_min }} мин</span>
+      <span class="meta">{{ r.servings }} порц.</span>
+      <span class="stars">{{ '★' * r.rating }}{{ '☆' * (5 - r.rating) if r.rating }}</span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% elif q or category or fav %}
+<p class="empty">Ничего не найдено. Измените запрос или сбросьте фильтры.</p>
+{% else %}
+<p class="empty">Рецептов пока нет. <a href="{{ url_for('new_recipe') }}">Добавьте первый.</a></p>
+{% endif %}
+{% endblock %}

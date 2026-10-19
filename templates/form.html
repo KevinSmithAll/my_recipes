@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Редактирование рецепта' if editing else 'Новый рецепт' }}{% endblock %}
+{% block content %}
+<h1>{{ 'Редактирование рецепта' if editing else 'Новый рецепт' }}</h1>
+<form class="recipe-form" method="post">
+  <label>Название
+    <input name="title" value="{{ r.title }}" required autofocus>
+  </label>
+
+  <div class="row">
+    <label>Категория
+      <select name="category">
+        {% for c in categories %}<option {{ 'selected' if c == r.category }}>{{ c }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Порций
+      <input type="number" name="servings" min="1" max="1000" value="{{ r.servings }}">
+    </label>
+    <label>Подготовка, мин
+      <input type="number" name="prep_min" min="0" value="{{ r.prep_min }}">
+    </label>
+    <label>Готовка, мин
+      <input type="number" name="cook_min" min="0" value="{{ r.cook_min }}">
+    </label>
+    <label>Оценка
+      <select name="rating">
+        <option value="0">Нет</option>
+        {% for n in range(1, 6) %}<option value="{{ n }}" {{ 'selected' if r.rating|int == n }}>{{ '★' * n }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <label>Описание
+    <textarea name="description" rows="2">{{ r.description }}</textarea>
+  </label>
+
+  <label>Ингредиенты (по одному в строке)
+    <textarea name="ingredients" rows="8" placeholder="200 г мука&#10;2 шт яйцо&#10;1/2 ч.л. соль&#10;перец по вкусу">{{ ingredients_text }}</textarea>
+    <small>Формат: количество, единица, название. Количество нужно для пересчёта порций; единицы: {{ units|join(', ') }}.</small>
+  </label>
+
+  <label>Приготовление (каждый шаг с новой строки)
+    <textarea name="steps" rows="8">{{ r.steps }}</textarea>
+  </label>
+
+  <label>Заметки
+    <textarea name="notes" rows="3">{{ r.notes }}</textarea>
+  </label>
+
+  <div class="actions">
+    <button class="primary">Сохранить</button>
+    <a class="btn" href="{{ url_for('recipe', rid=request.view_args.rid) if editing else url_for('index') }}">Отмена</a>
+  </div>
+</form>
+{% endblock %}

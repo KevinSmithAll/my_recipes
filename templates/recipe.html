@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ r.title }}{% endblock %}
+{% block content %}
+<article>
+  <h1>{{ r.title }}</h1>
+  <p class="meta-line">
+    {{ r.category }}. Подготовка {{ r.prep_min }} мин, готовка {{ r.cook_min }} мин.
+    {% if r.rating %}<span class="stars">{{ '★' * r.rating }}{{ '☆' * (5 - r.rating) }}</span>{% endif %}
+  </p>
+  {% if r.description %}<p class="lead">{{ r.description }}</p>{% endif %}
+
+  <div class="actions">
+    <a class="btn" href="{{ url_for('edit_recipe', rid=r.id) }}">Редактировать</a>
+    <form method="post" action="{{ url_for('toggle_favorite', rid=r.id) }}">
+      <button>{{ 'Убрать из избранного' if r.favorite else 'В избранное' }}</button>
+    </form>
+    <form method="post" action="{{ url_for('delete_recipe', rid=r.id) }}" onsubmit="return confirm('Удалить рецепт «{{ r.title }}»?')">
+      <button class="danger">Удалить</button>
+    </form>
+  </div>
+
+  <div class="two">
+    <section>
+      <h2>Ингредиенты</h2>
+      <form class="inline" method="get">
+        <label>Порций <input type="number" name="servings" min="1" max="1000" value="{{ servings }}"></label>
+        <button>Пересчитать</button>
+      </form>
+      {% if items %}
+      <ul class="ingr">
+        {% for i in items %}
+        <li><b>{{ i.amount|num }} {{ i.unit }}</b> {{ i.name }}</li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="{{ url_for('shop_recipe', rid=r.id) }}">
+        <input type="hidden" name="servings" value="{{ servings }}">
+        <button>Добавить в список покупок</button>
+      </form>
+      {% else %}
+      <p class="empty">Ингредиенты не указаны.</p>
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>Приготовление</h2>
+      {% if steps %}
+      <ol class="steps">{% for s in steps %}<li>{{ s }}</li>{% endfor %}</ol>
+      {% else %}
+      <p class="empty">Шаги не указаны.</p>
+      {% endif %}
+    </section>
+  </div>
+
+  {% if r.notes %}
+  <h2>Заметки</h2>
+  <p class="pre">{{ r.notes }}</p>
+  {% endif %}
+</article>
+{% endblock %}

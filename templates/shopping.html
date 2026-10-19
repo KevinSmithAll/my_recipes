@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Покупки{% endblock %}
+{% block content %}
+<h1>Список покупок</h1>
+
+<form class="inline add" method="post" action="{{ url_for('shopping_add') }}">
+  <input name="line" placeholder="Например: 500 г картофель" required>
+  <button>Добавить</button>
+</form>
+
+{% if items %}
+<ul class="shop">
+  {% for i in items %}
+  <li class="{{ 'done' if i.done }}">
+    <form method="post" action="{{ url_for('shopping_toggle', sid=i.id) }}">
+      <button class="tick" title="Отметить">{{ '✓' if i.done else '○' }}</button>
+    </form>
+    <span class="name"><b>{{ i.amount|num }} {{ i.unit }}</b> {{ i.name }}</span>
+    <form method="post" action="{{ url_for('shopping_delete', sid=i.id) }}">
+      <button class="link" title="Удалить">Убрать</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+<div class="actions">
+  <form method="post" action="{{ url_for('shopping_clear') }}">
+    <input type="hidden" name="only" value="done">
+    <button>Убрать купленное</button>
+  </form>
+  <form method="post" action="{{ url_for('shopping_clear') }}" onsubmit="return confirm('Очистить весь список?')">
+    <button class="danger">Очистить всё</button>
+  </form>
+</div>
+{% else %}
+<p class="empty">Список пуст. Откройте рецепт и нажмите «Добавить в список покупок».</p>
+{% endif %}
+{% endblock %}
