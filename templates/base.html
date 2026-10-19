@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Вкусная история{% endblock %}</title>
+  <title>{% block title %}Книга рецептов{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="{{ url_for('index') }}">Вкусная история</a>
+  <a class="brand" href="{{ url_for('index') }}">Книга рецептов</a>
   <nav>
     <a href="{{ url_for('index') }}">Рецепты</a>
+    <a href="{{ url_for('random_recipe') }}">Случайный рецепт</a>
     <a href="{{ url_for('shopping') }}">Покупки</a>
     <a href="{{ url_for('backup') }}">Резервная копия</a>
-    <a class="btn" href="{{ url_for('random_recipe') }}">Случайный рецепт</a>
     <a class="btn" href="{{ url_for('new_recipe') }}">Добавить рецепт</a>
   </nav>
 </header>

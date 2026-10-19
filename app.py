@@ -1,6 +1,5 @@
-"""«Вкусная история» — локальная книга рецептов на Flask и SQLite."""
+"""Книга рецептов для домашней кухни: Flask + SQLite, всё хранится локально."""
 import json
-import math
 import os
 import re
 import sqlite3
@@ -54,19 +53,12 @@ CREATE TABLE IF NOT EXISTS shopping (
 );
 """
 
-app = Flask(__name__, template_folder="templates", static_folder="static")
+app = Flask(__name__)
 app.secret_key = "home-kitchen-local-only"  # приложение слушает только localhost
+app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024  # файл копии не больше 20 МБ
 
 
 # ---------- база данных ----------
-def init_db():
-    with sqlite3.connect(DB_PATH) as db:
-        db.executescript(SCHEMA)
-
-
-init_db()
-
-
 def get_db():
     if "db" not in g:
         g.db = sqlite3.connect(DB_PATH)
@@ -82,6 +74,11 @@ def close_db(_exc):
     db = g.pop("db", None)
     if db is not None:
         db.close()
+
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as db:
+        db.executescript(SCHEMA)
 
 
 # ---------- разбор и форматирование ингредиентов ----------
@@ -146,21 +143,13 @@ def get_ingredients(rid):
         "SELECT * FROM ingredients WHERE recipe_id = ? ORDER BY position", (rid,)).fetchall()
 
 
-@app.route("/random")
-def random_recipe():
-    row = get_db().execute("SELECT id FROM recipes ORDER BY RANDOM() LIMIT 1").fetchone()
-    if row is None:
-        flash("Сначала добавьте хотя бы один рецепт")
-        return redirect(url_for("index"))
-    return redirect(url_for("recipe", rid=row["id"]))
-
-
 # ---------- рецепты ----------
-@app.route("/")
-def index():
-    q = request.args.get("q", "").strip()
-    category = request.args.get("category", "")
-    fav = request.args.get("fav") == "1"
+def read_filters():
+    return (request.args.get("q", "").strip(), request.args.get("category", ""),
+            request.args.get("fav") == "1")
+
+
+def filtered_recipes(q, category, fav, order="PYLOWER(title)", limit=None):
     sql, params = "SELECT * FROM recipes WHERE 1=1", []
     if q:
         sql += (" AND (PYLOWER(title) LIKE ? OR EXISTS (SELECT 1 FROM ingredients i "
@@ -171,10 +160,27 @@ def index():
         params.append(category)
     if fav:
         sql += " AND favorite = 1"
-    sql += " ORDER BY PYLOWER(title)"
-    recipes = get_db().execute(sql, params).fetchall()
-    return render_template("index.html", recipes=recipes, q=q, category=category,
-                           fav=fav, categories=CATEGORIES)
+    sql += f" ORDER BY {order}"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return get_db().execute(sql, params).fetchall()
+
+
+@app.route("/")
+def index():
+    q, category, fav = read_filters()
+    return render_template("index.html", recipes=filtered_recipes(q, category, fav),
+                           q=q, category=category, fav=fav, categories=CATEGORIES)
+
+
+@app.route("/random")
+def random_recipe():
+    """Случайный рецепт; учитывает поиск и фильтры, если они переданы."""
+    rows = filtered_recipes(*read_filters(), order="RANDOM()", limit=1)
+    if not rows:
+        flash("Подходящих рецептов не найдено")
+        return redirect(url_for("index"))
+    return redirect(url_for("recipe", rid=rows[0]["id"]))
 
 
 @app.route("/recipe/<int:rid>")
@@ -186,6 +192,14 @@ def recipe(rid):
               "unit": i["unit"], "name": i["name"]} for i in get_ingredients(rid)]
     steps = [s.strip() for s in r["steps"].splitlines() if s.strip()]
     return render_template("recipe.html", r=r, items=items, steps=steps, servings=servings)
+
+
+def insert_ingredients(db, rid, lines):
+    lines = [str(ln).strip() for ln in lines if str(ln).strip()]
+    for pos, line in enumerate(lines):
+        amount, unit, name = parse_ingredient(line)
+        db.execute("INSERT INTO ingredients (recipe_id, position, amount, unit, name)"
+                   " VALUES (?,?,?,?,?)", (rid, pos, amount, unit, name))
 
 
 def save_recipe(rid=None):
@@ -209,11 +223,7 @@ def save_recipe(rid=None):
             "UPDATE recipes SET title=?, category=?, servings=?, prep_min=?, cook_min=?,"
             " description=?, steps=?, notes=?, rating=? WHERE id=?", data + (rid,))
         db.execute("DELETE FROM ingredients WHERE recipe_id = ?", (rid,))
-    lines = [ln for ln in f.get("ingredients", "").splitlines() if ln.strip()]
-    for pos, line in enumerate(lines):
-        amount, unit, name = parse_ingredient(line)
-        db.execute("INSERT INTO ingredients (recipe_id, position, amount, unit, name)"
-                   " VALUES (?,?,?,?,?)", (rid, pos, amount, unit, name))
+    insert_ingredients(db, rid, f.get("ingredients", "").splitlines())
     db.commit()
     return rid
 
@@ -335,100 +345,6 @@ def shopping_clear():
 
 
 # ---------- резервная копия ----------
-def validate_backup(data):
-    if not isinstance(data, list):
-        raise ValueError("Ожидался JSON-массив рецептов")
-
-    recipes = []
-    seen_ids = set()
-    required = {"id", "title", "category", "servings", "prep_min", "cook_min",
-                "description", "steps", "notes", "rating", "favorite",
-                "created_at", "ingredients"}
-    for index, item in enumerate(data, start=1):
-        if not isinstance(item, dict) or not required.issubset(item):
-            raise ValueError(f"Рецепт №{index}: отсутствуют обязательные поля")
-
-        rid = item["id"]
-        if (isinstance(rid, bool) or not isinstance(rid, int) or not 1 <= rid <= 2**63 - 1
-                or rid in seen_ids):
-            raise ValueError(f"Рецепт №{index}: некорректный или повторяющийся идентификатор")
-        seen_ids.add(rid)
-
-        for field in ("title", "category", "description", "steps", "notes", "created_at"):
-            if not isinstance(item[field], str):
-                raise ValueError(f"Рецепт №{index}: поле «{field}» должно быть текстом")
-        if not item["title"].strip() or not item["created_at"]:
-            raise ValueError(f"Рецепт №{index}: пустое название или дата создания")
-
-        for field, minimum, maximum in (("servings", 1, 1000), ("prep_min", 0, 100000),
-                                        ("cook_min", 0, 100000), ("rating", 0, 5),
-                                        ("favorite", 0, 1)):
-            value = item[field]
-            if (isinstance(value, bool) or not isinstance(value, int)
-                    or not minimum <= value <= maximum):
-                raise ValueError(f"Рецепт №{index}: некорректное значение поля «{field}»")
-
-        if not isinstance(item["ingredients"], list):
-            raise ValueError(f"Рецепт №{index}: список ингредиентов задан неверно")
-        ingredients = []
-        for line in item["ingredients"]:
-            if not isinstance(line, str) or not line.strip():
-                raise ValueError(f"Рецепт №{index}: некорректная строка ингредиента")
-            amount, unit, name = parse_ingredient(line)
-            if amount is not None and not math.isfinite(amount):
-                raise ValueError(f"Рецепт №{index}: некорректное количество ингредиента")
-            ingredients.append((amount, unit, name))
-
-        recipes.append((item, ingredients))
-    return recipes
-
-
-@app.route("/backup")
-def backup():
-    return render_template("backup.html")
-
-
-@app.post("/backup/import")
-def import_backup():
-    upload = request.files.get("backup")
-    if upload is None or not upload.filename:
-        flash("Выберите JSON-файл резервной копии")
-        return redirect(url_for("backup"))
-
-    try:
-        recipes = validate_backup(json.loads(upload.read()))
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        flash("Не удалось прочитать файл: проверьте, что это корректный JSON в кодировке UTF-8")
-        return redirect(url_for("backup"))
-    except ValueError as error:
-        flash(f"Резервная копия не прошла проверку: {error}")
-        return redirect(url_for("backup"))
-
-    db = get_db()
-    try:
-        with db:
-            db.execute("DELETE FROM recipes")
-            for item, ingredients in recipes:
-                db.execute(
-                    "INSERT INTO recipes (id, title, category, servings, prep_min, cook_min,"
-                    " description, steps, notes, rating, favorite, created_at)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (item["id"], item["title"], item["category"], item["servings"],
-                     item["prep_min"], item["cook_min"], item["description"], item["steps"],
-                     item["notes"], item["rating"], item["favorite"], item["created_at"]))
-                for position, (amount, unit, name) in enumerate(ingredients):
-                    db.execute(
-                        "INSERT INTO ingredients (recipe_id, position, amount, unit, name)"
-                        " VALUES (?,?,?,?,?)",
-                        (item["id"], position, amount, unit, name))
-    except sqlite3.Error as error:
-        flash(f"Не удалось восстановить резервную копию: {error}")
-        return redirect(url_for("backup"))
-
-    flash(f"Восстановлено рецептов: {len(recipes)}")
-    return redirect(url_for("index"))
-
-
 @app.route("/export")
 def export():
     db = get_db()
@@ -442,7 +358,89 @@ def export():
         "Content-Disposition": "attachment; filename=recipes-backup.json"})
 
 
+# ---------- восстановление из резервной копии ----------
+@app.route("/backup")
+def backup():
+    count = get_db().execute("SELECT COUNT(*) FROM recipes").fetchone()[0]
+    return render_template("backup.html", count=count)
+
+
+def snapshot_db():
+    """Копия текущей базы перед заменой; возвращает имя файла."""
+    name = f"recipes-before-restore-{datetime.now():%Y%m%d-%H%M%S}.db"
+    dst = sqlite3.connect(os.path.join(BASE_DIR, name))
+    get_db().backup(dst)
+    dst.close()
+    return name
+
+
+def import_recipes(data, replace=False):
+    """Загружает список рецептов из JSON. Всё или ничего: при ошибке база не меняется."""
+    if not isinstance(data, list):
+        raise ValueError("в файле должен быть список рецептов (как в «Скачать копию»)")
+    db = get_db()
+    added = skipped = 0
+    try:
+        if replace:
+            db.execute("DELETE FROM recipes")  # ингредиенты удаляются каскадом
+        known = {row[0].lower() for row in db.execute("SELECT title FROM recipes")}
+        for n, item in enumerate(data, 1):
+            title = str(item.get("title", "")).strip() if isinstance(item, dict) else ""
+            if not title:
+                raise ValueError(f"рецепт №{n}: нет названия")
+            if title.lower() in known:
+                skipped += 1
+                continue
+            known.add(title.lower())
+            ingredients = item.get("ingredients") or []
+            if not isinstance(ingredients, list):
+                raise ValueError(f"рецепт №{n}: ингредиенты должны быть списком строк")
+            cur = db.execute(
+                "INSERT INTO recipes (title, category, servings, prep_min, cook_min, description,"
+                " steps, notes, rating, favorite, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (title, str(item.get("category") or "Другое"),
+                 to_int(item.get("servings"), 4, 1, 1000), to_int(item.get("prep_min")),
+                 to_int(item.get("cook_min")), str(item.get("description") or ""),
+                 str(item.get("steps") or ""), str(item.get("notes") or ""),
+                 to_int(item.get("rating"), 0, 0, 5), 1 if to_int(item.get("favorite")) else 0,
+                 str(item.get("created_at") or datetime.now().isoformat(timespec="seconds"))))
+            insert_ingredients(db, cur.lastrowid, ingredients)
+            added += 1
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return added, skipped
+
+
+@app.post("/restore")
+def restore():
+    file = request.files.get("backup")
+    if not file or not file.filename:
+        flash("Выберите файл резервной копии (.json)")
+        return redirect(url_for("backup"))
+    replace = request.form.get("mode") == "replace"
+    try:
+        try:
+            data = json.loads(file.read().decode("utf-8-sig"))
+        except ValueError:
+            raise ValueError("файл не похож на резервную копию (ожидается .json из «Скачать копию»)")
+        saved = snapshot_db() if replace else None
+        added, skipped = import_recipes(data, replace)
+    except ValueError as e:  # включая ошибки JSON и кодировки
+        flash(f"Не удалось восстановить: {e}. База не изменена.")
+        return redirect(url_for("backup"))
+    msg = f"Восстановлено рецептов: {added}"
+    if skipped:
+        msg += f", пропущено (уже есть с таким названием): {skipped}"
+    if saved:
+        msg += f". Прежняя база сохранена в файле {saved}"
+    flash(msg)
+    return redirect(url_for("index"))
+
+
+init_db()  # таблицы создаются при любом способе запуска (python app.py, flask run)
+
 if __name__ == "__main__":
-    init_db()
     threading.Timer(1.0, lambda: webbrowser.open(f"http://{HOST}:{PORT}")).start()
     app.run(host=HOST, port=PORT, debug=False)

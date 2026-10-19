@@ -1,22 +1,26 @@
 {% extends "base.html" %}
-{% block title %}Резервная копия — Вкусная история{% endblock %}
+{% block title %}Резервная копия{% endblock %}
 {% block content %}
 <h1>Резервная копия</h1>
-<p class="lead">Сохраните рецепты в JSON или восстановите их из ранее скачанного файла.</p>
+<p class="meta-line">Сейчас в книге рецептов: {{ count }}.</p>
 
-<div class="actions">
-  <a class="btn" href="{{ url_for('export') }}">Скачать резервную копию</a>
-</div>
+<h2>Сохранить</h2>
+<p>Скачайте все рецепты одним файлом. Храните его в надёжном месте, например на флешке или в облаке.</p>
+<p><a class="btn" href="{{ url_for('export') }}">Скачать копию (.json)</a></p>
 
-<h2>Восстановить из файла</h2>
-<p class="warning">Восстановление заменит все текущие рецепты и ингредиенты. Список покупок останется без изменений.</p>
-<form class="recipe-form" method="post" action="{{ url_for('import_backup') }}"
-      enctype="multipart/form-data"
-      onsubmit="return confirm('Заменить все текущие рецепты данными из выбранной резервной копии?');">
-  <label>
-    JSON-файл резервной копии
+<h2>Восстановить</h2>
+<form class="recipe-form" method="post" action="{{ url_for('restore') }}" enctype="multipart/form-data"
+      onsubmit="return this.mode.value !== 'replace' || confirm('Все текущие рецепты будут заменены рецептами из файла. Прежняя база сохранится отдельным файлом. Продолжить?')">
+  <label>Файл копии
     <input type="file" name="backup" accept=".json,application/json" required>
   </label>
-  <button class="primary" type="submit">Восстановить рецепты</button>
+  <fieldset class="modes">
+    <label class="check"><input type="radio" name="mode" value="add" checked>
+      Добавить к текущим. Рецепты с уже существующими названиями пропускаются.</label>
+    <label class="check"><input type="radio" name="mode" value="replace">
+      Заменить всё. Текущие рецепты удаляются, перед этим создаётся копия базы.</label>
+  </fieldset>
+  <div class="actions"><button class="primary">Восстановить</button></div>
+  <small>Список покупок в копию не входит и при восстановлении не меняется.</small>
 </form>
 {% endblock %}

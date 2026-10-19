@@ -6,9 +6,9 @@
     <option value="">Все категории</option>
     {% for c in categories %}<option {{ 'selected' if c == category }}>{{ c }}</option>{% endfor %}
   </select>
-  <label class="check"><input type="checkbox" name="fav" value="1" {{ 'checked' if fav }} onchange="this.form.submit()"> Только избранное</label>
-  <button type="submit">Найти</button>
-  <a class="btn" href="{{ url_for('random_recipe') }}">Случайный рецепт</a>
+  <label class="check"><input type="checkbox" name="fav" value="1" {{ 'checked' if fav }}> Только избранное</label>
+  <button>Найти</button>
+  <button type="submit" formaction="{{ url_for('random_recipe') }}" title="Выбрать случайный рецепт с учётом поиска и фильтров">Случайный рецепт</button>
 </form>
 
 {% if recipes %}
