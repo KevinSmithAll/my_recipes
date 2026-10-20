@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}План питания{% endblock %}
+{% block content %}
+<h1>План питания</h1>
+<p class="meta-line">Все дни доступны для заполнения сразу; увеличьте карточку выбранного дня, чтобы сосредоточиться на нём. Блюда выбираются отдельно для каждого участника. Пустое поле — ещё не запланировано, «—» — приём пищи пропускаем.</p>
+
+<nav class="week-nav" aria-label="Переключение недели">
+  <a class="btn" href="{{ url_for('meal_plan', week=previous) }}">← Предыдущая</a>
+  <strong>{{ days[0].date }} — {{ days[-1].date }}</strong>
+  <a class="btn" href="{{ url_for('meal_plan', week=current) }}">Текущая неделя</a>
+  <a class="btn" href="{{ url_for('meal_plan', week=next_week) }}">Следующая →</a>
+</nav>
+
+<form method="post" action="{{ url_for('meal_plan', week=week) }}">
+  <div class="actions">
+    <button type="button" id="download-week-image">Скачать неделю как PNG</button>
+  </div>
+  <button type="button" class="day-backdrop" aria-label="Закрыть увеличенную карточку дня"></button>
+  <div class="plan-week">
+    {% for day in days %}
+    <section class="plan-day">
+      <h2>
+        <span>{{ day.label }} <span class="meta">{{ day.date }}</span></span>
+      </h2>
+      <button type="button" class="open-day" aria-expanded="false">Карточка дня</button>
+      <div class="day-content">
+        {% for meal in day.meals %}
+        <fieldset class="plan-meal">
+          <legend>{{ meal.label }}</legend>
+          {% for person in meal.people %}
+          <div class="plan-person">
+            <span>{{ person.label }}</span>
+            <div class="meal-field">
+              <span>Блюдо</span>
+              <select name="{{ person.field }}" aria-label="{{ day.label }}, {{ meal.label }}, {{ person.label }}">
+                <option value="" {{ 'selected' if person.value == '' }}>Не выбрано</option>
+                <option value="dash" {{ 'selected' if person.value == 'dash' }}>—</option>
+                {% for recipe in recipes %}
+                <option value="{{ recipe.id }}" data-recipe-url="{{ url_for('recipe', rid=recipe.id) }}"
+                        {{ 'selected' if person.value == recipe.id|string }}>{{ recipe.title }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <label class="portion-field">
+              <span>Порций</span>
+              <input type="number" name="{{ person.field }}_portions" min="1" max="1000"
+                     value="{{ person.portions }}" aria-label="Порций для {{ person.label|lower }}">
+            </label>
+            <a class="recipe-card-link" href="#" target="_blank" rel="noopener"
+               aria-label="Открыть карточку рецепта" title="Открыть карточку рецепта" hidden>
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/>
+                <path d="M10 14 20 4M14 4h6v6"/>
+                <path d="M8 9h3M8 13h2"/>
+              </svg>
+            </a>
+          </div>
+          {% endfor %}
+        </fieldset>
+        {% endfor %}
+        <button type="submit" name="clear_day" value="{{ day.iso }}"
+                onclick="return confirm('Очистить весь план на {{ day.label|lower }}?')">Очистить день</button>
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+  <div class="actions">
+    <button class="primary">Сохранить план</button>
+    <label class="copy-week">
+      Копировать на неделю с
+      <input type="date" name="target_week" value="{{ copy_week }}">
+    </label>
+    <button type="submit" name="copy_to_week" value="1"
+            onclick="return confirm('План выбранной недели будет полностью заменён планом этой недели. Если текущая неделя пустая, выбранная неделя будет очищена. Продолжить?')">Копировать план</button>
+  </div>
+</form>
+<script src="{{ url_for('static', filename='meal_plan.js') }}" defer></script>
+<script>
+  document.querySelectorAll(".plan-person").forEach((person) => {
+    const select = person.querySelector("select");
+    const link = person.querySelector(".recipe-card-link");
+    const updateRecipeLink = () => {
+      const recipeUrl = select.selectedOptions[0]?.dataset.recipeUrl;
+      link.hidden = !recipeUrl;
+      if (recipeUrl) link.href = recipeUrl;
+    };
+    select.addEventListener("change", updateRecipeLink);
+    updateRecipeLink();
+  });
+  document.querySelectorAll(".open-day").forEach((button) => {
+    button.addEventListener("click", () => {
+      const day = button.closest(".plan-day");
+      document.querySelectorAll(".plan-day.expanded").forEach((expandedDay) => {
+        if (expandedDay === day) return;
+        expandedDay.classList.remove("expanded");
+        const expandedButton = expandedDay.querySelector(".open-day");
+        expandedButton.setAttribute("aria-expanded", "false");
+        expandedButton.textContent = "Карточка дня";
+      });
+      const expanded = day.classList.toggle("expanded");
+      document.body.classList.toggle("day-expanded", expanded);
+      button.setAttribute("aria-expanded", String(expanded));
+      button.textContent = expanded ? "Свернуть карточку" : "Карточка дня";
+    });
+  });
+  document.querySelector(".day-backdrop").addEventListener("click", () => {
+    const day = document.querySelector(".plan-day.expanded");
+    if (!day) return;
+    day.classList.remove("expanded");
+    day.querySelector(".open-day").setAttribute("aria-expanded", "false");
+    day.querySelector(".open-day").textContent = "Карточка дня";
+    document.body.classList.remove("day-expanded");
+  });
+</script>
+{% endblock %}

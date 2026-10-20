@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Состав семьи{% endblock %}
+{% block content %}
+<h1>Состав семьи</h1>
+<p class="meta-line">Активные участники отображаются в планах питания. Архивирование сохраняет прошлые планы.</p>
+
+<form class="inline add" method="post">
+  <input type="hidden" name="action" value="add">
+  <input name="name" maxlength="80" placeholder="Имя участника" required>
+  <button class="primary">Добавить участника</button>
+</form>
+
+<h2>Активные</h2>
+{% if active_members %}
+<ul class="family-list">
+  {% for member in active_members %}
+  <li>
+    <form class="family-edit" method="post">
+      <input type="hidden" name="action" value="rename">
+      <input type="hidden" name="member_id" value="{{ member.id }}">
+      <label>
+        <span class="sr-only">Имя участника</span>
+        <input name="name" value="{{ member.name }}" maxlength="80" required>
+      </label>
+      <button>Переименовать</button>
+    </form>
+    <form method="post">
+      <input type="hidden" name="action" value="archive">
+      <input type="hidden" name="member_id" value="{{ member.id }}">
+      <button class="danger" {{ 'disabled' if active_members|length == 1 }}>В архив</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">Нет активных участников семьи.</p>
+{% endif %}
+
+{% if archived_members %}
+<h2>Архив</h2>
+<ul class="family-list">
+  {% for member in archived_members %}
+  <li>
+    <span>{{ member.name }}</span>
+    <form method="post">
+      <input type="hidden" name="action" value="restore">
+      <input type="hidden" name="member_id" value="{{ member.id }}">
+      <button>Вернуть в состав</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

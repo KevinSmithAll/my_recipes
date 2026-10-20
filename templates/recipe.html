@@ -11,6 +11,7 @@
 
   <div class="actions">
     <a class="btn" href="{{ url_for('edit_recipe', rid=r.id) }}">Редактировать</a>
+    <button type="button" id="download-recipe-image">Скачать рецепт как PNG</button>
     <form method="post" action="{{ url_for('toggle_favorite', rid=r.id) }}">
       <button>{{ 'Убрать из избранного' if r.favorite else 'В избранное' }}</button>
     </form>
@@ -56,4 +57,6 @@
   <p class="pre">{{ r.notes }}</p>
   {% endif %}
 </article>
+<script type="application/json" id="recipe-export-data">{{ export_data|tojson }}</script>
+<script src="{{ url_for('static', filename='recipe_png.js') }}" defer></script>
 {% endblock %}

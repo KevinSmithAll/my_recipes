@@ -6,11 +6,12 @@
 
 <h2>Сохранить</h2>
 <p>Скачайте все рецепты одним файлом. Храните его в надёжном месте, например на флешке или в облаке.</p>
+<p class="meta-line">JSON-копия включает рецепты, состав семьи и планы питания с количеством порций. Список покупок в неё не входит.</p>
 <p><a class="btn" href="{{ url_for('export') }}">Скачать копию (.json)</a></p>
 
 <h2>Восстановить</h2>
 <form class="recipe-form" method="post" action="{{ url_for('restore') }}" enctype="multipart/form-data"
-      onsubmit="return this.mode.value !== 'replace' || confirm('Все текущие рецепты будут заменены рецептами из файла. Прежняя база сохранится отдельным файлом. Продолжить?')">
+      onsubmit="return this.mode.value !== 'replace' || confirm('Текущие рецепты, состав семьи и планы питания будут заменены данными из файла. Прежняя база сохранится отдельным файлом. Продолжить?')">
   <label>Файл копии
     <input type="file" name="backup" accept=".json,application/json" required>
   </label>
@@ -18,9 +19,9 @@
     <label class="check"><input type="radio" name="mode" value="add" checked>
       Добавить к текущим. Рецепты с уже существующими названиями пропускаются.</label>
     <label class="check"><input type="radio" name="mode" value="replace">
-      Заменить всё. Текущие рецепты удаляются, перед этим создаётся копия базы.</label>
+      Заменить всё. Текущие рецепты, состав семьи и планы питания заменяются данными из файла, перед этим создаётся копия базы.</label>
   </fieldset>
   <div class="actions"><button class="primary">Восстановить</button></div>
-  <small>Список покупок в копию не входит и при восстановлении не меняется.</small>
+  <small>При добавлении рецепты с совпадающими названиями пропускаются, а записи плана объединяются по дате, приёму пищи и человеку. Список покупок JSON-копия не включает.</small>
 </form>
 {% endblock %}

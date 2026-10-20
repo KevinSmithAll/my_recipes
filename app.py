@@ -4,8 +4,9 @@ import os
 import re
 import sqlite3
 import threading
+import uuid
 import webbrowser
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from flask import (Flask, Response, abort, flash, g, redirect,
                    render_template, request, url_for)
@@ -16,6 +17,7 @@ HOST, PORT = "127.0.0.1", 5000
 
 CATEGORIES = ["Завтраки", "Супы", "Основные блюда", "Гарниры", "Салаты",
               "Закуски", "Выпечка", "Десерты", "Напитки", "Заготовки", "Другое"]
+MEALS = [("breakfast", "Завтрак"), ("lunch", "Обед"), ("dinner", "Ужин")]
 UNITS = {"г", "кг", "мг", "мл", "л", "шт", "ст.л.", "ч.л.", "стакан", "стакана",
          "стаканов", "щепотка", "щепотки", "зубчик", "зубчика", "зубчиков",
          "пучок", "пучка", "банка", "банки", "упаковка", "упаковки", "кусок",
@@ -51,6 +53,21 @@ CREATE TABLE IF NOT EXISTS shopping (
     unit TEXT NOT NULL DEFAULT '',
     done INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS family_members (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))
+);
+CREATE TABLE IF NOT EXISTS meal_plan (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    meal_date TEXT NOT NULL,
+    meal TEXT NOT NULL CHECK (meal IN ('breakfast', 'lunch', 'dinner')),
+    person TEXT NOT NULL REFERENCES family_members(id),
+    recipe_id INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+    is_dash INTEGER NOT NULL DEFAULT 0 CHECK (is_dash IN (0, 1)),
+    portions INTEGER NOT NULL DEFAULT 1 CHECK (portions BETWEEN 1 AND 1000),
+    UNIQUE (meal_date, meal, person)
+);
 """
 
 app = Flask(__name__)
@@ -79,6 +96,32 @@ def close_db(_exc):
 def init_db():
     with sqlite3.connect(DB_PATH) as db:
         db.executescript(SCHEMA)
+        columns = {row[1] for row in db.execute("PRAGMA table_info(meal_plan)")}
+        if "portions" not in columns:
+            db.execute(
+                "ALTER TABLE meal_plan ADD COLUMN portions INTEGER NOT NULL DEFAULT 1"
+                " CHECK (portions BETWEEN 1 AND 1000)")
+        db.execute(
+            "INSERT OR IGNORE INTO family_members (id, name) VALUES ('wife', 'Жена'), ('husband', 'Муж')")
+        table_sql = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'meal_plan'"
+        ).fetchone()[0]
+        if "person IN ('wife', 'husband')" in table_sql:
+            db.execute("ALTER TABLE meal_plan RENAME TO meal_plan_legacy")
+            db.execute(
+                "CREATE TABLE meal_plan ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "meal_date TEXT NOT NULL,"
+                "meal TEXT NOT NULL CHECK (meal IN ('breakfast', 'lunch', 'dinner')),"
+                "person TEXT NOT NULL REFERENCES family_members(id),"
+                "recipe_id INTEGER REFERENCES recipes(id) ON DELETE SET NULL,"
+                "is_dash INTEGER NOT NULL DEFAULT 0 CHECK (is_dash IN (0, 1)),"
+                "portions INTEGER NOT NULL DEFAULT 1 CHECK (portions BETWEEN 1 AND 1000),"
+                "UNIQUE (meal_date, meal, person))")
+            db.execute(
+                "INSERT INTO meal_plan (id, meal_date, meal, person, recipe_id, is_dash, portions)"
+                " SELECT id, meal_date, meal, person, recipe_id, is_dash, portions FROM meal_plan_legacy")
+            db.execute("DROP TABLE meal_plan_legacy")
 
 
 # ---------- разбор и форматирование ингредиентов ----------
@@ -173,6 +216,232 @@ def index():
                            q=q, category=category, fav=fav, categories=CATEGORIES)
 
 
+@app.route("/family", methods=["GET", "POST"])
+def family():
+    db = get_db()
+    if request.method == "POST":
+        action = request.form.get("action")
+        member_id = request.form.get("member_id", "")
+        if action == "add":
+            name = request.form.get("name", "").strip()
+            if not name:
+                flash("Укажите имя участника семьи.")
+            elif len(name) > 80:
+                flash("Имя участника не должно быть длиннее 80 символов.")
+            elif db.execute(
+                    "SELECT 1 FROM family_members WHERE PYLOWER(name) = PYLOWER(?)",
+                    (name,)).fetchone():
+                flash("Участник с таким именем уже есть.")
+            else:
+                db.execute("INSERT INTO family_members (id, name) VALUES (?, ?)",
+                           (uuid.uuid4().hex, name))
+                db.commit()
+                flash(f"Участник «{name}» добавлен.")
+            return redirect(url_for("family"))
+
+        member = db.execute(
+            "SELECT * FROM family_members WHERE id = ?", (member_id,)).fetchone()
+        if member is None:
+            abort(404)
+        if action == "rename":
+            name = request.form.get("name", "").strip()
+            duplicate = db.execute(
+                "SELECT 1 FROM family_members WHERE PYLOWER(name) = PYLOWER(?) AND id != ?",
+                (name, member_id)).fetchone()
+            if not name:
+                flash("Имя участника не может быть пустым.")
+            elif len(name) > 80:
+                flash("Имя участника не должно быть длиннее 80 символов.")
+            elif duplicate:
+                flash("Участник с таким именем уже есть.")
+            else:
+                db.execute("UPDATE family_members SET name = ? WHERE id = ?",
+                           (name, member_id))
+                db.commit()
+                flash("Имя участника обновлено.")
+        elif action in ("archive", "restore"):
+            active = bool(member["active"])
+            if action == "archive" and active:
+                active_count = db.execute(
+                    "SELECT COUNT(*) FROM family_members WHERE active = 1").fetchone()[0]
+                if active_count <= 1:
+                    flash("Нельзя архивировать последнего активного участника.")
+                    return redirect(url_for("family"))
+            db.execute("UPDATE family_members SET active = ? WHERE id = ?",
+                       (0 if action == "archive" else 1, member_id))
+            db.commit()
+            flash("Участник перемещён в архив." if action == "archive"
+                  else "Участник возвращён в состав семьи.")
+        else:
+            abort(400)
+        return redirect(url_for("family"))
+
+    active_members = db.execute(
+        "SELECT * FROM family_members WHERE active = 1 ORDER BY id IN ('wife', 'husband') DESC, name COLLATE NOCASE"
+    ).fetchall()
+    archived_members = db.execute(
+        "SELECT * FROM family_members WHERE active = 0 ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+    return render_template("family.html", active_members=active_members,
+                           archived_members=archived_members)
+
+
+@app.route("/meal-plan", methods=["GET", "POST"])
+def meal_plan():
+    week_value = request.values.get("week", "")
+    try:
+        selected_day = date.fromisoformat(week_value) if week_value else date.today()
+        monday = selected_day - timedelta(days=selected_day.weekday())
+    except ValueError:
+        monday = date.today() - timedelta(days=date.today().weekday())
+        flash("Некорректная дата недели. Показана текущая неделя.")
+
+    days = [monday + timedelta(days=offset) for offset in range(7)]
+    db = get_db()
+    family_members = db.execute(
+        "SELECT id, name FROM family_members WHERE active = 1 ORDER BY"
+        " id IN ('wife', 'husband') DESC, name COLLATE NOCASE").fetchall()
+    if request.method == "POST":
+        copy_to_week = request.form.get("copy_to_week")
+        target_monday = None
+        if copy_to_week:
+            try:
+                target_day = date.fromisoformat(request.form.get("target_week", ""))
+            except ValueError:
+                flash("Укажите корректную дату недели, куда копировать план.")
+                return redirect(url_for("meal_plan", week=monday.isoformat()))
+            target_monday = target_day - timedelta(days=target_day.weekday())
+            if target_monday == monday:
+                flash("Выберите другую неделю для копирования.")
+                return redirect(url_for("meal_plan", week=monday.isoformat()))
+
+        clear_day = request.form.get("clear_day")
+        if clear_day:
+            if clear_day not in {day.isoformat() for day in days}:
+                abort(400)
+            db.execute("DELETE FROM meal_plan WHERE meal_date = ?", (clear_day,))
+            db.commit()
+            flash("План на день очищен")
+            return redirect(url_for("meal_plan", week=monday.isoformat()))
+
+        choices = []
+        try:
+            for day in days:
+                for meal, _meal_label in MEALS:
+                    for member in family_members:
+                        person = member["id"]
+                        field = f"{day.isoformat()}_{meal}_{person}"
+                        if field not in request.form:
+                            raise ValueError("Форма плана заполнена не полностью.")
+                        value = request.form[field]
+                        try:
+                            portions = int(request.form[f"{field}_portions"])
+                        except (KeyError, ValueError):
+                            raise ValueError("Укажите количество порций целым числом.")
+                        if not 1 <= portions <= 1000:
+                            raise ValueError("Количество порций должно быть от 1 до 1000.")
+                        if value in ("", "dash"):
+                            choices.append((day.isoformat(), meal, person, None,
+                                            1 if value == "dash" else 0, portions))
+                            continue
+                        try:
+                            recipe_id = int(value)
+                        except ValueError:
+                            raise ValueError("Выбрано неизвестное блюдо.")
+                        if not db.execute("SELECT 1 FROM recipes WHERE id = ?",
+                                          (recipe_id,)).fetchone():
+                            raise ValueError("Выбранный рецепт не найден.")
+                        choices.append((day.isoformat(), meal, person, recipe_id, 0, portions))
+        except ValueError as error:
+            flash(f"Не удалось сохранить план: {error}")
+            return redirect(url_for("meal_plan", week=monday.isoformat()))
+
+        for meal_date, meal, person, recipe_id, is_dash, portions in choices:
+            if recipe_id is None and not is_dash:
+                db.execute(
+                    "DELETE FROM meal_plan WHERE meal_date = ? AND meal = ? AND person = ?",
+                    (meal_date, meal, person))
+            else:
+                db.execute(
+                    "INSERT INTO meal_plan (meal_date, meal, person, recipe_id, is_dash, portions)"
+                    " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(meal_date, meal, person)"
+                    " DO UPDATE SET recipe_id = excluded.recipe_id, is_dash = excluded.is_dash,"
+                    " portions = excluded.portions",
+                    (meal_date, meal, person, recipe_id, is_dash, portions))
+
+        if target_monday:
+            target_sunday = target_monday + timedelta(days=6)
+            db.execute(
+                "DELETE FROM meal_plan WHERE meal_date BETWEEN ? AND ?"
+                " AND person IN (SELECT id FROM family_members WHERE active = 1)",
+                (target_monday.isoformat(), target_sunday.isoformat()))
+            shift_days = (target_monday - monday).days
+            copied = db.execute(
+                "INSERT INTO meal_plan (meal_date, meal, person, recipe_id, is_dash, portions)"
+                " SELECT date(meal_date, ?), meal, person, recipe_id, is_dash, portions"
+                " FROM meal_plan WHERE meal_date BETWEEN ? AND ?"
+                " AND (recipe_id IS NOT NULL OR is_dash = 1)"
+                " AND person IN (SELECT id FROM family_members WHERE active = 1)",
+                (f"{shift_days} days", days[0].isoformat(), days[-1].isoformat())).rowcount
+            db.commit()
+            if copied:
+                flash(f"План скопирован на неделю с {target_monday:%d.%m.%Y}: записей {copied}.")
+            else:
+                flash(f"План на неделю с {target_monday:%d.%m.%Y} очищен: исходная неделя пустая.")
+            return redirect(url_for("meal_plan", week=target_monday.isoformat()))
+
+        db.commit()
+        flash("План питания сохранён")
+        return redirect(url_for("meal_plan", week=monday.isoformat()))
+
+    stored = db.execute(
+        "SELECT meal_date, meal, person, recipe_id, is_dash, portions FROM meal_plan"
+        " WHERE meal_date BETWEEN ? AND ?"
+        " AND person IN (SELECT id FROM family_members WHERE active = 1)",
+        (days[0].isoformat(), days[-1].isoformat())).fetchall()
+    values = {}
+    for entry in stored:
+        key = (entry["meal_date"], entry["meal"], entry["person"])
+        values[key] = {
+            "recipe": "dash" if entry["is_dash"] else (
+                str(entry["recipe_id"]) if entry["recipe_id"] is not None else ""),
+            "portions": entry["portions"],
+        }
+
+    week_days = []
+    weekday_names = ("Понедельник", "Вторник", "Среда", "Четверг", "Пятница",
+                     "Суббота", "Воскресенье")
+    for day in days:
+        meals = []
+        for meal, meal_label in MEALS:
+            meals.append({
+                "key": meal,
+                "label": meal_label,
+                "people": [{
+                    "key": person,
+                    "label": person_label,
+                    "field": f"{day.isoformat()}_{meal}_{person}",
+                    "value": values.get((day.isoformat(), meal, person), {}).get("recipe", ""),
+                    "portions": values.get((day.isoformat(), meal, person), {}).get("portions", 1),
+                } for person, person_label in [(member["id"], member["name"])
+                                               for member in family_members]],
+            })
+        week_days.append({
+            "iso": day.isoformat(),
+            "label": weekday_names[day.weekday()],
+            "date": day.strftime("%d.%m"),
+            "meals": meals,
+        })
+
+    recipes = db.execute("SELECT id, title FROM recipes ORDER BY PYLOWER(title)").fetchall()
+    return render_template(
+        "meal_plan.html", days=week_days, recipes=recipes, week=monday.isoformat(),
+        previous=(monday - timedelta(days=7)).isoformat(),
+        next_week=(monday + timedelta(days=7)).isoformat(),
+        copy_week=(monday + timedelta(days=7)).isoformat(),
+        current=(date.today() - timedelta(days=date.today().weekday())).isoformat())
+
+
 @app.route("/random")
 def random_recipe():
     """Случайный рецепт; учитывает поиск и фильтры, если они переданы."""
@@ -191,7 +460,20 @@ def recipe(rid):
     items = [{"amount": i["amount"] * factor if i["amount"] is not None else None,
               "unit": i["unit"], "name": i["name"]} for i in get_ingredients(rid)]
     steps = [s.strip() for s in r["steps"].splitlines() if s.strip()]
-    return render_template("recipe.html", r=r, items=items, steps=steps, servings=servings)
+    export_data = {
+        "title": r["title"],
+        "category": r["category"],
+        "servings": servings,
+        "prep_min": r["prep_min"],
+        "cook_min": r["cook_min"],
+        "rating": r["rating"],
+        "description": r["description"],
+        "ingredients": [ingredient_line(item) for item in items],
+        "steps": steps,
+        "notes": r["notes"],
+    }
+    return render_template("recipe.html", r=r, items=items, steps=steps,
+                           servings=servings, export_data=export_data)
 
 
 def insert_ingredients(db, rid, lines):
@@ -348,12 +630,39 @@ def shopping_clear():
 @app.route("/export")
 def export():
     db = get_db()
-    out = []
+    recipes = []
     for r in db.execute("SELECT * FROM recipes ORDER BY id"):
         item = dict(r)
         item["ingredients"] = [ingredient_line(i) for i in get_ingredients(r["id"])]
-        out.append(item)
-    body = json.dumps(out, ensure_ascii=False, indent=2)
+        recipes.append(item)
+    family_members = [{
+        "id": row["id"],
+        "name": row["name"],
+        "active": bool(row["active"]),
+    } for row in db.execute("SELECT id, name, active FROM family_members ORDER BY id")]
+    meal_plan = [{
+        "date": row["meal_date"],
+        "meal": row["meal"],
+        "member_id": row["person"],
+        "person_name": row["person_name"],
+        "recipe_title": row["recipe_title"],
+        "is_dash": bool(row["is_dash"]),
+        "portions": row["portions"],
+    } for row in db.execute(
+        "SELECT mp.meal_date, mp.meal, mp.person, fm.name AS person_name,"
+        " r.title AS recipe_title,"
+        " mp.is_dash, mp.portions"
+        " FROM meal_plan mp JOIN family_members fm ON fm.id = mp.person"
+        " LEFT JOIN recipes r ON r.id = mp.recipe_id"
+        " WHERE mp.is_dash = 1 OR mp.recipe_id IS NOT NULL"
+        " ORDER BY mp.meal_date, mp.meal, mp.person")]
+    body = json.dumps({
+        "format": "my_recipes_backup",
+        "version": 3,
+        "recipes": recipes,
+        "family_members": family_members,
+        "meal_plan": meal_plan,
+    }, ensure_ascii=False, indent=2)
     return Response(body, mimetype="application/json", headers={
         "Content-Disposition": "attachment; filename=recipes-backup.json"})
 
@@ -375,23 +684,124 @@ def snapshot_db():
 
 
 def import_recipes(data, replace=False):
-    """Загружает список рецептов из JSON. Всё или ничего: при ошибке база не меняется."""
-    if not isinstance(data, list):
-        raise ValueError("в файле должен быть список рецептов (как в «Скачать копию»)")
+    """Загружает рецепты и планы из JSON. Всё или ничего при ошибке."""
+    if isinstance(data, list):
+        recipes_data, meal_plan_data, members_data, version = data, [], [], 0
+    elif isinstance(data, dict) and data.get("format") == "my_recipes_backup":
+        version = data.get("version")
+        if version not in (1, 2, 3):
+            raise ValueError("неподдерживаемая версия резервной копии")
+        recipes_data = data.get("recipes")
+        meal_plan_data = data.get("meal_plan")
+        members_data = data.get("family_members", []) if version >= 3 else []
+        if (not isinstance(recipes_data, list) or not isinstance(meal_plan_data, list)
+                or not isinstance(members_data, list)):
+            raise ValueError("в копии должны быть списки рецептов и планов питания")
+    else:
+        raise ValueError("неизвестный формат резервной копии")
+
+    validated_members = []
+    member_ids = set()
+    member_names = set()
+    for n, item in enumerate(members_data, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"участник семьи №{n}: ожидался объект")
+        member_id = item.get("id")
+        name = item.get("name")
+        active = item.get("active")
+        if not isinstance(member_id, str) or not member_id.strip() or member_id in member_ids:
+            raise ValueError(f"участник семьи №{n}: некорректный или повторяющийся идентификатор")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"участник семьи №{n}: не указано имя")
+        if name.strip().casefold() in member_names:
+            raise ValueError(f"участник семьи №{n}: имя уже используется")
+        if not isinstance(active, bool):
+            raise ValueError(f"участник семьи №{n}: некорректный статус")
+        member_ids.add(member_id)
+        member_names.add(name.strip().casefold())
+        validated_members.append((member_id, name.strip(), active))
+    if version >= 3 and not any(member[2] for member in validated_members):
+        raise ValueError("в копии должен быть хотя бы один активный участник семьи")
+    member_names_by_id = {member_id: name for member_id, name, _active in validated_members}
+
+    validated_plan = []
+    for n, entry in enumerate(meal_plan_data, 1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"запись плана №{n}: ожидался объект")
+        try:
+            meal_date = date.fromisoformat(entry.get("date", "")).isoformat()
+        except (TypeError, ValueError):
+            raise ValueError(f"запись плана №{n}: некорректная дата")
+        meal = entry.get("meal")
+        if version >= 3:
+            person = entry.get("member_id")
+            person_name = entry.get("person_name")
+            if (not isinstance(person, str) or person not in member_ids
+                    or not isinstance(person_name, str) or not person_name.strip()):
+                raise ValueError(f"запись плана №{n}: участник отсутствует в копии")
+            if person_name.strip() != member_names_by_id[person]:
+                raise ValueError(f"запись плана №{n}: имя участника не совпадает с составом семьи")
+        else:
+            person = entry.get("person")
+            person_name = {"wife": "Жена", "husband": "Муж"}.get(person)
+        recipe_title = entry.get("recipe_title")
+        is_dash = entry.get("is_dash")
+        portions = entry.get("portions", 1)
+        if meal not in {key for key, _label in MEALS}:
+            raise ValueError(f"запись плана №{n}: неизвестный приём пищи")
+        if version < 3 and person_name is None:
+            raise ValueError(f"запись плана №{n}: неизвестный участник")
+        if not isinstance(is_dash, bool):
+            raise ValueError(f"запись плана №{n}: некорректное значение прочерка")
+        if (not isinstance(portions, int) or isinstance(portions, bool)
+                or not 1 <= portions <= 1000):
+            raise ValueError(f"запись плана №{n}: количество порций должно быть от 1 до 1000")
+        if is_dash:
+            if recipe_title is not None:
+                raise ValueError(f"запись плана №{n}: прочерк не может содержать рецепт")
+        elif not isinstance(recipe_title, str) or not recipe_title.strip():
+            raise ValueError(f"запись плана №{n}: не указано название рецепта")
+        validated_plan.append((meal_date, meal, person, person_name, recipe_title,
+                               is_dash, portions))
+
     db = get_db()
     added = skipped = 0
     try:
         if replace:
+            db.execute("DELETE FROM meal_plan")
             db.execute("DELETE FROM recipes")  # ингредиенты удаляются каскадом
-        known = {row[0].lower() for row in db.execute("SELECT title FROM recipes")}
-        for n, item in enumerate(data, 1):
+            if version >= 3:
+                db.execute("DELETE FROM family_members")
+        member_mapping = {}
+        for member_id, name, active in validated_members:
+            existing = db.execute(
+                "SELECT id FROM family_members WHERE PYLOWER(name) = PYLOWER(?)",
+                (name,)).fetchone()
+            if existing:
+                local_id = existing["id"]
+                if replace:
+                    db.execute("UPDATE family_members SET active = ? WHERE id = ?",
+                               (int(active), local_id))
+            else:
+                local_id = member_id
+                if db.execute(
+                        "SELECT 1 FROM family_members WHERE id = ?", (local_id,)).fetchone():
+                    local_id = uuid.uuid4().hex
+                db.execute(
+                    "INSERT INTO family_members (id, name, active) VALUES (?, ?, ?)",
+                    (local_id, name, int(active)))
+            member_mapping[member_id] = local_id
+        if version < 3:
+            member_mapping = {"wife": "wife", "husband": "husband"}
+        known = {row["title"].lower(): row["id"]
+                 for row in db.execute("SELECT id, title FROM recipes")}
+        for n, item in enumerate(recipes_data, 1):
             title = str(item.get("title", "")).strip() if isinstance(item, dict) else ""
             if not title:
                 raise ValueError(f"рецепт №{n}: нет названия")
             if title.lower() in known:
                 skipped += 1
                 continue
-            known.add(title.lower())
             ingredients = item.get("ingredients") or []
             if not isinstance(ingredients, list):
                 raise ValueError(f"рецепт №{n}: ингредиенты должны быть списком строк")
@@ -405,12 +815,36 @@ def import_recipes(data, replace=False):
                  to_int(item.get("rating"), 0, 0, 5), 1 if to_int(item.get("favorite")) else 0,
                  str(item.get("created_at") or datetime.now().isoformat(timespec="seconds"))))
             insert_ingredients(db, cur.lastrowid, ingredients)
+            known[title.lower()] = cur.lastrowid
             added += 1
+        for meal_date, meal, person, person_name, recipe_title, is_dash, portions in validated_plan:
+            if version >= 3:
+                member_id = member_mapping[person]
+            else:
+                member_id = person
+                existing = db.execute(
+                    "SELECT id FROM family_members WHERE id = ?", (member_id,)).fetchone()
+                if existing is None:
+                    db.execute(
+                        "INSERT INTO family_members (id, name) VALUES (?, ?)",
+                        (member_id, person_name))
+            recipe_id = None
+            if recipe_title is not None:
+                recipe_id = known.get(recipe_title.strip().lower())
+                if recipe_id is None:
+                    raise ValueError(
+                        f"план на {meal_date}: рецепт «{recipe_title}» отсутствует в копии")
+            db.execute(
+                "INSERT INTO meal_plan (meal_date, meal, person, recipe_id, is_dash, portions)"
+                " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(meal_date, meal, person)"
+                " DO UPDATE SET recipe_id = excluded.recipe_id, is_dash = excluded.is_dash,"
+                " portions = excluded.portions",
+                (meal_date, meal, member_id, recipe_id, int(is_dash), portions))
         db.commit()
     except Exception:
         db.rollback()
         raise
-    return added, skipped
+    return added, skipped, len(validated_plan)
 
 
 @app.post("/restore")
@@ -426,13 +860,15 @@ def restore():
         except ValueError:
             raise ValueError("файл не похож на резервную копию (ожидается .json из «Скачать копию»)")
         saved = snapshot_db() if replace else None
-        added, skipped = import_recipes(data, replace)
+        added, skipped, plan_entries = import_recipes(data, replace)
     except ValueError as e:  # включая ошибки JSON и кодировки
         flash(f"Не удалось восстановить: {e}. База не изменена.")
         return redirect(url_for("backup"))
     msg = f"Восстановлено рецептов: {added}"
     if skipped:
         msg += f", пропущено (уже есть с таким названием): {skipped}"
+    if plan_entries:
+        msg += f". Записей плана питания восстановлено: {plan_entries}"
     if saved:
         msg += f". Прежняя база сохранена в файле {saved}"
     flash(msg)
